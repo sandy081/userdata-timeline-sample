@@ -1,7 +1,7 @@
 {
-	"name": "settings-timeline",
-	"displayName": "settings-timeline",
-	"description": "Settings Timeline Provider",
+	"name": "userdata-timeline",
+	"displayName": "userdata-timeline",
+	"description": "Userdata Timeline Provider",
 	"version": "0.0.1",
 	"publisher": "sandy081",
 	"engines": {
