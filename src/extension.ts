@@ -27,7 +27,7 @@ class UserDataFileChangesTimelineProvider implements vscode.TimelineProvider {
 
 	constructor(private readonly userDataBackupService: UserDataBackupService) {
 		this.disposables.push(this._onDidChange);
-		this.userDataBackupService.onDidChange(resource => this._onDidChange.fire({ uri: vscode.Uri.file(`${resource}.json`).with({ scheme: 'vscode-userdata' }) }));
+		this.userDataBackupService.onDidChange(resource => this._onDidChange.fire({ uri: vscode.Uri.file(path.join(this.userDataBackupService.userDataPath, `${resource}.json`)).with({ scheme: 'vscode-userdata' }) }));
 		vscode.commands.registerCommand('userdata.timeline.openDiff', (left: vscode.Uri, right: vscode.Uri) => vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(left.path)} ↔ Now`));
 	}
 
@@ -85,7 +85,7 @@ export interface IUserDataBackupEntry {
 class UserDataBackupService {
 
 	private readonly userDataBackupFolder: string;
-	private readonly userDataPath = path.resolve(getUserDataPath());
+	readonly userDataPath = path.resolve(getUserDataPath());
 
 	private readonly _onDidChange: vscode.EventEmitter<UserDataResource> = new vscode.EventEmitter<UserDataResource>();
 	readonly onDidChange = this._onDidChange.event;
