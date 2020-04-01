@@ -36,11 +36,16 @@ class UserDataFileChangesTimelineProvider implements vscode.TimelineProvider {
 		const allEntries = await this.userDataBackupService.getAllEntries(basename.substring(0, basename.length - 5) as UserDataResource);
 		const filteredEntries = this.filterEntries(allEntries, options);
 		const items = filteredEntries.map(entry => this.toTimelineItem(entry, uri));
-		return { items };
+		const cursor = options.cursor ? parseInt(options.cursor) + 10 : 10;
+		return { items, paging: { cursor: allEntries.length > cursor ? `${cursor}` : undefined } };
 	}
 
 	private filterEntries(entries: IUserDataBackupEntry[], options: vscode.TimelineOptions): IUserDataBackupEntry[] {
-		return entries;
+		if (options.cursor) {
+			const start = parseInt(options.cursor);
+			return entries.slice(start, start + 10);
+		}
+		return entries.slice(0, 10);
 	}
 
 	private toTimelineItem(entry: IUserDataBackupEntry, uri: vscode.Uri): vscode.TimelineItem {
