@@ -1,5 +1,3 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
@@ -176,71 +174,4 @@ function pad(n: number, l: number, char: string = '0'): string {
 	}
 
 	return r.reverse().join('');
-}
-
-const minute = 60;
-const hour = minute * 60;
-const day = hour * 24;
-const week = day * 7;
-const month = day * 30;
-const year = day * 365;
-
-function fromNow(date: number | Date): string {
-	if (typeof date !== 'number') {
-		date = date.getTime();
-	}
-
-	const seconds = Math.round((new Date().getTime() - date) / 1000);
-	if (seconds < 30) {
-		return 'now';
-	}
-
-	let value: number;
-	if (seconds < minute) {
-		value = seconds;
-
-		return value === 1
-			? `${value} sec ago`
-			: `${value} secs ago`;
-	}
-
-	if (seconds < hour) {
-		value = Math.floor(seconds / minute);
-		return value === 1
-			? `${value} min ago`
-			: `${0} mins ago`;
-	}
-
-	if (seconds < day) {
-		value = Math.floor(seconds / hour);
-		return value === 1
-			? `${value} hr ago`
-			: `${value} hrs ago`;
-	}
-
-	if (seconds < week) {
-		value = Math.floor(seconds / day);
-		return value === 1
-			? `${value} day ago`
-			: `${value} days ago`;
-	}
-
-	if (seconds < month) {
-		value = Math.floor(seconds / week);
-		return value === 1
-			? `${value} wk ago`
-			: `${value} wks ago`;
-	}
-
-	if (seconds < year) {
-		value = Math.floor(seconds / month);
-		return value === 1
-			? `${value} mo ago`
-			: `${value} mos ago`;
-	}
-
-	value = Math.floor(seconds / year);
-	return value === 1
-		? `${value} yr ago`
-		: `${value} yrs ago`;
 }
