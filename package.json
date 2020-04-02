@@ -20,8 +20,20 @@
 			{
 				"command": "userdata.timeline.openDiff",
 				"title": "Open Comparison"
+			},
+			{
+				"command": "userdata.timeline.replace",
+				"title": "Replace"
 			}
-		]
+		],
+		"menus": {
+			"timeline/item/context": [
+				{
+					"command": "userdata.timeline.replace",
+					"when": "timelineItem == userdata/settings"
+				}
+			]
+		}
 	},
 	"scripts": {
 		"vscode:prepublish": "yarn run compile",

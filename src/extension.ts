@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as os from 'os';
 import * as fs from 'fs';
 import { promisify } from 'util';
 
@@ -13,6 +12,11 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => userDataBackupService.backup(UserDataResource.Settings)));
 	context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('userdata-timeline', new UserDataFileChangesDocumentProvider(userDataBackupService)));
 
+}
+
+interface UserDataTimelineItem extends vscode.TimelineItem {
+	source: vscode.Uri;
+	backup: vscode.Uri;
 }
 
 class UserDataFileChangesTimelineProvider implements vscode.TimelineProvider {
@@ -28,7 +32,8 @@ class UserDataFileChangesTimelineProvider implements vscode.TimelineProvider {
 	constructor(private readonly userDataBackupService: UserDataBackupService) {
 		this.disposables.push(this._onDidChange);
 		this.userDataBackupService.onDidChange(resource => this._onDidChange.fire({ uri: vscode.Uri.file(path.join(this.userDataBackupService.userDataPath, `${resource}.json`)).with({ scheme: 'vscode-userdata' }) }));
-		vscode.commands.registerCommand('userdata.timeline.openDiff', (left: vscode.Uri, right: vscode.Uri) => vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(left.path)} ↔ Now`));
+		vscode.commands.registerCommand('userdata.timeline.openDiff', (left: vscode.Uri, right: vscode.Uri) => this.openDiff(left, right));
+		vscode.commands.registerCommand('userdata.timeline.replace', userDataTimelineEntry => this.replace(userDataTimelineEntry));
 	}
 
 	async provideTimeline(uri: vscode.Uri, options: vscode.TimelineOptions, token: vscode.CancellationToken): Promise<vscode.Timeline | null> {
@@ -48,15 +53,32 @@ class UserDataFileChangesTimelineProvider implements vscode.TimelineProvider {
 		return entries.slice(0, 10);
 	}
 
-	private toTimelineItem(entry: IUserDataBackupEntry, uri: vscode.Uri): vscode.TimelineItem {
-		const item = new vscode.TimelineItem(entry.name, entry.created);
-		item.iconPath = vscode.ThemeIcon.File;
-		item.command = {
-			title: 'Open Comparison',
-			command: 'userdata.timeline.openDiff',
-			arguments: [vscode.Uri.file(path.join('', entry.resource, entry.name)).with({ scheme: 'userdata-timeline' }), uri]
-		};
-		return item;
+	private toTimelineItem(entry: IUserDataBackupEntry, source: vscode.Uri): UserDataTimelineItem {
+		const backup = vscode.Uri.file(path.join('', entry.resource, entry.name)).with({ scheme: 'userdata-timeline' });
+		return {
+			label: entry.name.substring(0, entry.name.length - 5),
+			timestamp: entry.created,
+			source,
+			backup,
+			iconPath: vscode.ThemeIcon.File,
+			command: {
+				title: 'Open Comparison',
+				command: 'userdata.timeline.openDiff',
+				arguments: [backup, source]
+			},
+			contextValue: `userdata/${entry.resource}`
+		}
+	}
+
+	private openDiff(left: vscode.Uri, right: vscode.Uri): void {
+		vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(left.path)} ↔ Now`);
+	}
+
+	private async replace(item: UserDataTimelineItem): Promise<void> {
+		const name = path.basename(item.backup.path);
+		const resource = path.basename(path.dirname(item.backup.path));
+		const content = await this.userDataBackupService.resolveContent(resource as UserDataResource, name);
+		await promisify(fs.writeFile)(item.source.with({ scheme: 'file' }).path, content);
 	}
 
 	dispose() {
@@ -89,13 +111,14 @@ export interface IUserDataBackupEntry {
 
 class UserDataBackupService {
 
+	readonly userDataPath: string;
 	private readonly userDataBackupFolder: string;
-	readonly userDataPath = path.resolve(getUserDataPath());
 
 	private readonly _onDidChange: vscode.EventEmitter<UserDataResource> = new vscode.EventEmitter<UserDataResource>();
 	readonly onDidChange = this._onDidChange.event;
 
 	constructor(context: vscode.ExtensionContext) {
+		this.userDataPath = path.dirname(path.dirname(context.globalStoragePath));
 		this.userDataBackupFolder = path.join(context.globalStoragePath, 'userdata-backup');
 	}
 
@@ -148,16 +171,6 @@ class UserDataBackupService {
 
 // this method is called when your extension is deactivated
 export function deactivate() { }
-
-function getUserDataPath() {
-	const name = 'Code - Insiders';
-	switch (process.platform) {
-		case 'win32': return `${path.join(process.env['USERPROFILE']!, 'AppData', 'Roaming', name, 'User')}`;
-		case 'darwin': return path.join(os.homedir(), 'Library', 'Application Support', name, 'User');
-		case 'linux': return path.join(os.homedir(), '.config', name, 'User');
-		default: throw new Error('Platform not supported');
-	}
-}
 
 function toLocalISOString(date: Date): string {
 	return date.getFullYear() +
