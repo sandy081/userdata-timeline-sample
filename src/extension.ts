@@ -119,7 +119,7 @@ abstract class UserDataBackupResolver {
 
 	constructor(readonly scheme: string, protected readonly userDataBackupFolder: string, context: vscode.ExtensionContext) {
 		this.userDataPath = path.dirname(path.dirname(context.globalStoragePath));
-		context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('userdata-sync-timeline', this));
+		context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(scheme, this));
 	}
 
 	async provideTextDocumentContent(uri: vscode.Uri, token: vscode.CancellationToken): Promise<string> {
