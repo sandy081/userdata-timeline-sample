@@ -5,13 +5,26 @@ import { promisify } from 'util';
 
 export function activate(context: vscode.ExtensionContext) {
 
-	const userDataBackupService = new UserDataBackupService(context);
-	const userDataFileChangesTimelineProvider = new UserDataFileChangesTimelineProvider(userDataBackupService);
+	const userDataBackupService = new UserDataChangesBackupService(context);
+	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => userDataBackupService.backup(UserDataResource.Settings)));
+
+	const userDataFileChangesTimelineProvider = new UserDataBackupTimelineProvider('UserDataFileChangesTimelineProvider', 'Local History', new vscode.ThemeIcon('history'), userDataBackupService);
 	context.subscriptions.push(userDataFileChangesTimelineProvider);
 	context.subscriptions.push(vscode.workspace.registerTimelineProvider('vscode-userdata', userDataFileChangesTimelineProvider));
-	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => userDataBackupService.backup(UserDataResource.Settings)));
-	context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('userdata-timeline', new UserDataFileChangesDocumentProvider(userDataBackupService)));
 
+	const userDataSyncBackupResolver = new UserDataSyncBackupResolver(context);
+	const userDataSyncBackupTimelineProvider = new UserDataBackupTimelineProvider('UserDataSyncBackupTimelineProvider', 'Sync History', new vscode.ThemeIcon('sync'), userDataSyncBackupResolver);
+	context.subscriptions.push(userDataSyncBackupTimelineProvider);
+	context.subscriptions.push(vscode.workspace.registerTimelineProvider('vscode-userdata', userDataSyncBackupTimelineProvider));
+
+	context.subscriptions.push(vscode.commands.registerCommand('userdata.timeline.openDiff', (left: vscode.Uri, right: vscode.Uri) => {
+		const userDataBackupTimelineProvider: UserDataBackupTimelineProvider = left.scheme === userDataBackupService.scheme ? userDataFileChangesTimelineProvider : userDataSyncBackupTimelineProvider;
+		return userDataBackupTimelineProvider.openDiff(left, right);
+	}));
+	context.subscriptions.push(vscode.commands.registerCommand('userdata.timeline.replace', (userDataTimelineEntry: UserDataTimelineItem) => {
+		const userDataBackupTimelineProvider: UserDataBackupTimelineProvider = userDataTimelineEntry.backup.scheme === userDataBackupService.scheme ? userDataFileChangesTimelineProvider : userDataSyncBackupTimelineProvider;
+		return userDataBackupTimelineProvider.replace(userDataTimelineEntry);
+	}));
 }
 
 interface UserDataTimelineItem extends vscode.TimelineItem {
@@ -19,26 +32,25 @@ interface UserDataTimelineItem extends vscode.TimelineItem {
 	backup: vscode.Uri;
 }
 
-class UserDataFileChangesTimelineProvider implements vscode.TimelineProvider {
+class UserDataBackupTimelineProvider implements vscode.TimelineProvider {
 
-	readonly id = 'UserDataFileChangesTimelineProvider';
-	readonly label = 'Local Timeline';
+	protected readonly disposables: vscode.Disposable[] = [];
 
-	private readonly disposables: vscode.Disposable[] = [];
-
-	private readonly _onDidChange: vscode.EventEmitter<vscode.TimelineChangeEvent> = new vscode.EventEmitter<vscode.TimelineChangeEvent>();
+	protected readonly _onDidChange: vscode.EventEmitter<vscode.TimelineChangeEvent> = new vscode.EventEmitter<vscode.TimelineChangeEvent>();
 	readonly onDidChange = this._onDidChange.event;
 
-	constructor(private readonly userDataBackupService: UserDataBackupService) {
+	constructor(
+		readonly id: string,
+		readonly label: string,
+		readonly icon: vscode.ThemeIcon,
+		private readonly userDataBackupResolver: UserDataBackupResolver
+	) {
 		this.disposables.push(this._onDidChange);
-		this.userDataBackupService.onDidChange(resource => this._onDidChange.fire({ uri: vscode.Uri.file(path.join(this.userDataBackupService.userDataPath, `${resource}.json`)).with({ scheme: 'vscode-userdata' }) }));
-		vscode.commands.registerCommand('userdata.timeline.openDiff', (left: vscode.Uri, right: vscode.Uri) => this.openDiff(left, right));
-		vscode.commands.registerCommand('userdata.timeline.replace', userDataTimelineEntry => this.replace(userDataTimelineEntry));
 	}
 
 	async provideTimeline(uri: vscode.Uri, options: vscode.TimelineOptions, token: vscode.CancellationToken): Promise<vscode.Timeline | null> {
 		const basename = path.basename(uri.path);
-		const allEntries = await this.userDataBackupService.getAllEntries(basename.substring(0, basename.length - 5) as UserDataResource);
+		const allEntries = await this.userDataBackupResolver.getAllEntries(basename.substring(0, basename.length - 5) as UserDataResource);
 		const filteredEntries = this.filterEntries(allEntries, options);
 		const items = filteredEntries.map(entry => this.toTimelineItem(entry, uri));
 		const cursor = options.cursor ? parseInt(options.cursor) + 10 : 10;
@@ -54,48 +66,36 @@ class UserDataFileChangesTimelineProvider implements vscode.TimelineProvider {
 	}
 
 	private toTimelineItem(entry: IUserDataBackupEntry, source: vscode.Uri): UserDataTimelineItem {
-		const backup = vscode.Uri.file(path.join('', entry.resource, entry.name)).with({ scheme: 'userdata-timeline' });
 		return {
 			label: entry.name.substring(0, entry.name.length - 5),
 			timestamp: entry.created,
 			source,
-			backup,
-			iconPath: vscode.ThemeIcon.File,
+			backup: entry.uri,
+			iconPath: this.icon,
 			command: {
 				title: 'Open Comparison',
 				command: 'userdata.timeline.openDiff',
-				arguments: [backup, source]
+				arguments: [entry.uri, source]
 			},
 			contextValue: `userdata/${entry.resource}`
 		}
 	}
 
-	private openDiff(left: vscode.Uri, right: vscode.Uri): void {
-		vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(left.path)} ↔ Now`);
-	}
-
-	private async replace(item: UserDataTimelineItem): Promise<void> {
+	async replace(item: UserDataTimelineItem): Promise<void> {
 		const name = path.basename(item.backup.path);
 		const resource = path.basename(path.dirname(item.backup.path));
-		const content = await this.userDataBackupService.resolveContent(resource as UserDataResource, name);
+		const content = await this.userDataBackupResolver.resolveContent(resource as UserDataResource, name);
 		await promisify(fs.writeFile)(item.source.with({ scheme: 'file' }).path, content);
+	}
+
+	openDiff(left: vscode.Uri, right: vscode.Uri): void {
+		vscode.commands.executeCommand('vscode.diff', left, right, `${path.basename(left.path)} ↔ Now`);
 	}
 
 	dispose() {
 		vscode.Disposable.from(...this.disposables).dispose();
 	}
 
-}
-
-class UserDataFileChangesDocumentProvider implements vscode.TextDocumentContentProvider {
-
-	constructor(private readonly userDataBackupService: UserDataBackupService) { }
-
-	async provideTextDocumentContent(uri: vscode.Uri, token: vscode.CancellationToken): Promise<string> {
-		const name = path.basename(uri.path);
-		const resource = path.basename(path.dirname(uri.path));
-		return this.userDataBackupService.resolveContent(resource as UserDataResource, name);
-	}
 }
 
 export const enum UserDataResource {
@@ -105,21 +105,27 @@ export const enum UserDataResource {
 
 export interface IUserDataBackupEntry {
 	readonly resource: UserDataResource;
+	readonly uri: vscode.Uri;
 	readonly name: string;
 	readonly created: number;
 }
 
-class UserDataBackupService {
+abstract class UserDataBackupResolver {
 
 	readonly userDataPath: string;
-	private readonly userDataBackupFolder: string;
 
-	private readonly _onDidChange: vscode.EventEmitter<UserDataResource> = new vscode.EventEmitter<UserDataResource>();
-	readonly onDidChange = this._onDidChange.event;
+	protected readonly _onDidChangeResource: vscode.EventEmitter<UserDataResource> = new vscode.EventEmitter<UserDataResource>();
+	readonly onDidChangeResource = this._onDidChangeResource.event;
 
-	constructor(context: vscode.ExtensionContext) {
+	constructor(readonly scheme: string, protected readonly userDataBackupFolder: string, context: vscode.ExtensionContext) {
 		this.userDataPath = path.dirname(path.dirname(context.globalStoragePath));
-		this.userDataBackupFolder = path.join(context.globalStoragePath, 'userdata-backup');
+		context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('userdata-sync-timeline', this));
+	}
+
+	async provideTextDocumentContent(uri: vscode.Uri, token: vscode.CancellationToken): Promise<string> {
+		const name = path.basename(uri.path);
+		const resource = path.basename(path.dirname(uri.path));
+		return this.resolveContent(resource as UserDataResource, name);
 	}
 
 	async resolveContent(resource: UserDataResource, name: string): Promise<string> {
@@ -137,23 +143,10 @@ class UserDataBackupService {
 			const userDataBackupFolderPath = path.join(this.userDataBackupFolder, resource);
 			const children = await promisify(fs.readdir)(userDataBackupFolderPath);
 			const all = children.filter(name => /^\d{8}T\d{6}(\.json)?$/.test(name)).sort().reverse();
-			return all.map(name => ({ name, created: this.getCreationTime(name), resource }));
+			return all.map(name => ({ name, created: this.getCreationTime(name), resource, uri: vscode.Uri.file(path.join('', resource, name)).with({ scheme: this.scheme }) }));
 		} catch (e) {
 			return [];
 		}
-	}
-
-	async backup(resource: UserDataResource): Promise<void> {
-		const userDataFilePath = path.join(this.userDataPath, `${resource}.json`);
-		const userDataBackupFolderPath = path.join(this.userDataBackupFolder, resource);
-		if (!(await promisify(fs.exists)(userDataBackupFolderPath))) {
-			await promisify(fs.mkdir)(userDataBackupFolderPath, { recursive: true });
-		}
-
-		const userDataBackupFilePath = path.join(userDataBackupFolderPath, `${toLocalISOString(new Date()).replace(/-|:|\.\d+Z$/g, '')}.json`);
-		const content = await promisify(fs.readFile)(userDataFilePath);
-		await promisify(fs.writeFile)(userDataBackupFilePath, content);
-		this._onDidChange.fire(resource);
 	}
 
 	private getCreationTime(name: string): number {
@@ -165,6 +158,39 @@ class UserDataBackupService {
 			parseInt(name.substring(11, 13)),
 			parseInt(name.substring(13, 15))
 		).getTime();
+	}
+}
+
+class UserDataSyncBackupResolver extends UserDataBackupResolver {
+
+	constructor(context: vscode.ExtensionContext) {
+		super('userdata-sync-timeline', path.join(path.dirname(path.dirname(context.globalStoragePath)), 'sync'), context);
+	}
+
+	async resolveContent(resource: UserDataResource, name: string): Promise<string> {
+		let resolvedContent = await super.resolveContent(resource, name);
+		const { content } = JSON.parse(resolvedContent);
+		const { settings } = JSON.parse(content);
+		return settings;
+	}
+}
+
+class UserDataChangesBackupService extends UserDataBackupResolver {
+
+	constructor(context: vscode.ExtensionContext) {
+		super('userdata-timeline', path.join(context.globalStoragePath, 'userdata-backup'), context);
+	}
+
+	async backup(resource: UserDataResource): Promise<void> {
+		const userDataFilePath = path.join(this.userDataPath, `${resource}.json`);
+		const userDataBackupFolderPath = path.join(this.userDataBackupFolder, resource);
+		if (!(await promisify(fs.exists)(userDataBackupFolderPath))) {
+			await promisify(fs.mkdir)(userDataBackupFolderPath, { recursive: true });
+		}
+		const userDataBackupFilePath = path.join(userDataBackupFolderPath, `${toLocalISOString(new Date()).replace(/-|:|\.\d+Z$/g, '')}.json`);
+		const content = await promisify(fs.readFile)(userDataFilePath);
+		await promisify(fs.writeFile)(userDataBackupFilePath, content);
+		this._onDidChangeResource.fire(resource);
 	}
 
 }
